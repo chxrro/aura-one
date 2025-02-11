@@ -2,8 +2,9 @@ import carla
 import cv2
 import numpy as np
 import torch
-from dqn_model import DQNAgent  # Assuming you have a DQN model implemented in dqn_model.py
+from custom_model import CustomAgent  # Use the custom model
 import logging
+from hybrid_astar import HybridAStar  # Import Hybrid A* path planner
 
 def main():
     # Set up logging
@@ -20,27 +21,40 @@ def main():
     spawn_point = world.get_map().get_spawn_points()[0]
     vehicle = world.spawn_actor(vehicle_bp, spawn_point)
 
-    # Initialize the DQN agent
-    agent = DQNAgent(state_size=6, action_size=3)  # Adjust state_size and action_size as needed
+    # Initialize the custom agent
+    agent = CustomAgent(state_size=(1, 84, 84), action_size=3)  # Adjust state_size and action_size as needed
+
+    # Initialize the path planner
+    path_planner = HybridAStar()
 
     while True:
         # Get the current state from the simulation
         image = get_camera_image(vehicle)
         state = preprocess_image(image)
         speed = vehicle.get_velocity().length()
-        state = np.append(state, [speed])
+        additional_state = np.array([speed])
 
         # Get the action from the agent
-        action = agent.act(state)
+        action = agent.act((state, additional_state))
+
+        # Use the path planner to generate a path
+        current_location = vehicle.get_location()
+        target_location = get_target_location()  # Define this function to get the target location
+        path = path_planner.plan(current_location, target_location)
 
         # Apply the action to the vehicle
-        apply_action(vehicle, action)
+        apply_action(vehicle, action, path)
 
         # Get the reward and next state
-        next_state, reward, done = get_reward_and_next_state(vehicle)
+        next_image = get_camera_image(vehicle)
+        next_state = preprocess_image(next_image)
+        next_speed = vehicle.get_velocity().length()
+        next_additional_state = np.array([next_speed])
+        reward = compute_reward(vehicle)
+        done = check_done(vehicle)
 
         # Train the agent
-        agent.step(state, action, reward, next_state, done)
+        agent.step((state, additional_state), action, reward, (next_state, next_additional_state), done)
 
         logging.info(f"Action: {action}, Reward: {reward}, Done: {done}")
 
@@ -69,13 +83,13 @@ def get_camera_image(vehicle):
     return image
 
 def preprocess_image(image):
-    # Function to preprocess the image for the DQN model
+    # Function to preprocess the image for the custom model
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     resized = cv2.resize(gray, (84, 84))
     state = np.array(resized).reshape(1, 84, 84)
     return state
 
-def apply_action(vehicle, action):
+def apply_action(vehicle, action, path):
     # Function to apply the action to the vehicle
     control = carla.VehicleControl()
     if action == 0:
@@ -88,16 +102,6 @@ def apply_action(vehicle, action):
         control.throttle = 0.5
         control.steer = 0.5
     vehicle.apply_control(control)
-
-def get_reward_and_next_state(vehicle):
-    # Function to get the reward and next state
-    image = get_camera_image(vehicle)
-    next_state = preprocess_image(image)
-    speed = vehicle.get_velocity().length()
-    next_state = np.append(next_state, [speed])
-    reward = compute_reward(vehicle)
-    done = check_done(vehicle)
-    return next_state, reward, done
 
 def compute_reward(vehicle):
     # Enhanced reward logic
@@ -168,6 +172,11 @@ def check_done(vehicle):
         done = True  # Terminate if collision occurs
 
     return done
+
+def get_target_location():
+    # Define this function to get the target location for the path planner
+    # For example, you can set a fixed target location or use a dynamic target
+    return carla.Location(x=100, y=100, z=0)  # Example target location
 
 if __name__ == "__main__":
     main()
